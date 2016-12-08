@@ -1,0 +1,175 @@
+mfs的使用
+
+mfs 挂载点  /mnt/mfs
+
+一、模拟：客户端误删除源码包
+
+恢复流程：
+a) ./reserved ./trash 出现这两个目录
+b) ./trash下，有一个./undel的目录,还有一些被删除的以8位16进制命名的目录，并且以"|"作为目录符号，再加上被删除文件名字。（如果文件名字大于系统支持的255最大长度时，将从左到右进行裁剪，直到满足255）
+规则：00000009|1，1代表删除的文件。
+0000002E|123|tst 代表123目录下tst文件，如果123目录被一起删除，恢复的时候123这个目录也会被一同恢复出来。
+c) 如果想恢复文件，把00000009|1该文件移动到/mnt/mfsmeta/trash/undel下，文件即可恢复。
+d) ./reserved这个目录的作用是针对那些已被彻底删除但目前正被打开着的文件。
+
+[root@localhost mfs]# ll /mnt/mfs/hello/
+total 16
+-rw-r--r-- 1 root root     0 Nov 30 03:49 1.txt
+-rw-r--r-- 1 root root 14540 Nov 30 07:12 epel-release-6-8.noarch.rpm
+-rw-r--r-- 1 root root   931 Nov 30 03:49 passwdbak
+
+
+1.删除文件
+cd /mnt/mfs/hello/
+[root@localhost hello]# rm epel-release-6-8.noarch.rpm 
+rm: remove regular file `epel-release-6-8.noarch.rpm'? y
+
+2.创建文件还原目录
+mkdir /mnt/test
+/usr/local/mfs/bin/mfsmount  -m /mnt/test/ -H 192.168.50.119
+
+3.恢复文件
+cd /mnt/test/trash/
+[root@localhost trash]# ll
+total 15
+-rw-r--r-- 1 root root 14540 Nov 30 07:12 00000006|hello|epel-release-6-8.noarch.rpm
+d-w------- 2 root root     0 Dec  1 22:02 undel
+
+[root@localhost trash]# mv 00000006\|hello\|epel-release-6-8.noarch.rpm  undel/
+
+4.到mfs客户端挂载点查看
+[root@localhost mfs]# ll /mnt/mfs/hello/
+total 16
+-rw-r--r-- 1 root root     0 Nov 30 03:49 1.txt
+-rw-r--r-- 1 root root 14540 Nov 30 07:12 epel-release-6-8.noarch.rpm
+-rw-r--r-- 1 root root   931 Nov 30 03:49 passwdbak
+
+
+mfs常用的一些操作
+
+/usr/local/mfs/bin/mfssetgoal -r 3 hello/        设置备份次数
+hello1/:
+ inodes with goal changed:               1
+ inodes with goal not changed:           0
+ inodes with permission denied:          0
+
+注意：拷贝份数尽量和chunkserver这个服务的数量保持一致，比较易于管理，数据额安全性也得到保障。 
+ 
+/usr/local/mfs/bin/mfsgetgoal hello/        查看文件备份数
+hello/: 3
+
+cp /etc/passwd hello/passwdbak 拷贝文件
+[root@localhost mfs]# /usr/local/mfs/bin/mfsfileinfo hello/passwdbak    查看文件具体信息
+hello/passwdbak:
+        chunk 0: 0000000000000001_00000001 / (id:1 ver:1)
+                copy 1: 192.168.50.120:9422
+
+[root@localhost mfs]# /usr/local/mfs/bin/mfscheckfile hello/passwdbak   查看文件的实际拷贝份数
+hello/passwdbak:
+ chunks with 1 copy:              1
+ 
+设置回收站清空时间
+/usr/local/mfs/bin/mfssettrashtime  600 /mnt/mfs/  
+ps：600的单位是秒，也就是回收站文件保存的时间为10分钟
+
+快照
+MooseFS系统的另一个特征是利用mfsmakesnapshot工具给文件或者是目录树做快照，例如：
+$ mfsmakesnapshot source ... destination
+
+mfsmakesnapshot
+/usr/local/mfs/bin/mfsmakesnapshot /mnt/mfs/123/tmp2 /mnt/mfs/111/
+此命令是一个CP的过程，会自动将tmp2这个文件cp到111目录下。也可以针对一个目录来操作。
+
+mfsappendchunks destination-file source-file ...
+当有多个源文件时，它们的快照被加入到同一个目标文件中（每个chunk的最大量是chunk）。
+/usr/local/mfs/bin/mfsappendchunks /mnt/mfs/111/shot /mnt/mfs/123/123 /mnt/mfs/123/tmp2
+将1个以上的源文件做成一个包，这里是将123和tmp2这两个文件的块追加到shot的块文件中。
+注：
+源和目标必须都属于mfs体系，即不能将mfs体系中的文件快照到其他文件系统。
+
+
+维护MFS
+ 
+      维护mfs最重要的是维护元数据服务器的/usr/local/mfs/var/mfs/，MFS的存储修改更新等操作变化都
+
+会记录在这个目录中，因此只要保证这个目录的数据安全就能保证整个MFS的数据安全和可靠性。
+
+   启动mfs集群的顺序。安全的启动顺序步骤为：
+   启动mfsmaster->启动所有的mfschunkserver->启动mfsmetalogger进程
+
+   停止mfs集群
+   在所有的客户端卸载mfs文件系统 -> mfschunkserver -s停止所有的数据存储进程 -> mfsmetalogger -s 停止元数据日志服务进程 -> mfsmaster -s 停止管理服务器进程
+
+   数据存储服务器的维护，如果每个文件的goal目标都不小于2，并且没有under-goal文件，那么一个数据存储服务器在任何时候都可以停止或重新启动
+ 
+  mfs管理服务器的恢复
+  如果元管理服务器崩溃，需要最后一个元数据改变的日志changelog和主要元数据文件metadat.mfs，这个
+
+操作可以通过mfsmetarestore工具来完成
+         mfsmetarestore -a
+ 执行此命令后会默认在/usr/local/mfs/var/mfs目录自动寻找需要改变的日志文件和主要的元数据，mfsmetarestore在命令恢复时自动查找的是metadata.mfs.back文件。
+
+
+  从备份恢复MFS管理服务器步骤如下
+  1）安装一个元管理服务器利用同样的配置来配置这台服务器
+  2）找回metadata.mfs.back文件，也可以从启动的元数据日志服务器中找，放到数据目录如/usr/local/mfs/var/mfs/
+  3)从元管理服务器宕机之前的任何运行元数据日志服务器上复制最后一个changelog.*.mfs文件放入元管理服务器的数据目录
+  4) 利用 mfsmetarestore -a 来恢复
+
+
+二、模拟元数据服务器进程被意外结束，执行恢复操作
+
+1） 停止元数据服务器
+kill -9 杀掉mfsmaster进程
+
+2）备份元数据服务器数据
+# cd /usr/local/mfs/var
+# tar cvf mfs.tar mfs
+
+3）启动元数据服务器
+/usr/local/mfs/sbin/mfsmaster start
+提示初始化数据失败
+
+4）执行恢复操作
+# /usr/local/mfs/sbin/mfsmetarestore -a
+
+5）启动元数据服务器
+/usr/local/mfs/sbin/mfsmaster start
+
+6）客户端挂载验证数据是否还存在
+
+三、模拟进程被意外关闭，并且日志文件被损毁。
+
+
+
+1） 停止元数据服务器
+kill -9 杀掉mfsmaster进程
+
+2）备份元数据服务器数据（该操作主要以防实验失败，集群无法恢复而做的一个预防操作）
+# cd /usr/local/mfs/var
+# tar cvf mfs.tar mfs
+
+3）删除目录，模拟故障
+# rm -rf mfs/*
+
+4）启动元数据服务器
+/usr/local/mfs/sbin/mfsmaster start
+提示初始化数据失败
+
+5）从元数据日志服务器把备份文件恢复过来
+# rsync -alvR 192.168.242.133:/usr/local/mfs/var/mfs /
+把所有文件名字去掉_ml
+
+
+6）执行恢复操作
+# /usr/local/mfs/sbin/mfsmetarestore -a
+
+7）启动元数据服务器
+/usr/local/mfs/sbin/mfsmaster start
+
+8）客户端挂载验证数据是否还存在  
+  
+  
+参考地址
+http://www.wtoutiao.com/p/BeevDt.html
+http://www.tanpao.com/archives/39

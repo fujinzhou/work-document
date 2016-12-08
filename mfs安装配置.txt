@@ -1,0 +1,192 @@
+MFS文件系统的组成
+1、  元数据服务器。在整个体系中负责管理管理文件系统，目前MFS只支持一个元数据服务器master，这是一个单点故障，需要一个性能稳定的服务器来充当。希望今后MFS能支持多个master服务器，进一步提高系统的可靠性。
+2、  数据存储服务器chunkserver。真正存储用户数据的服务器。存储文件时，首先把文件分成块，然后这些块在数据服务器chunkserver之间复制（复制份数可以手工指定，建议设置副本数为3）。数据服务器可以是多个，并且数量越多，可使用的“磁盘空间”越大，可靠性也越高。
+3、  元数据日志服务器Metalogger server(Metalogger)：负责备份master服务器的变化日志文件，文件类型为changelog_ml.*.mfs，以便于在master server出问题的时候接替其进行工作。
+4、  客户端。使用MFS文件系统来存储和访问的主机称为MFS的客户端，成功挂接MFS文件系统以后，就可以像以前使用NFS一样共享这个虚拟性的存储了。
+
+
+环境：mfsmaster：192.168.50.119
+      mfschunk，mfslogger，mfsclient: 192.168.50.120
+
+一、mfsmaster安装配置
+1.创建安装用户
+useradd mfs -s /sbin/nologin
+2.安装
+tar -xf mfs-1.6.27-5.tar.gz && cd  mfs-1.6.27
+./configure --prefix=/usr/local/mfs --with-default-user=mfs --with-default-group=mfs
+make && make install
+3.配置文件
+cd /usr/local/mfs/etc/mfs/
+cp mfsmaster.cfg.dist  mfsmaster.cfg
+cp mfsexports.cfg.dist  mfsexports.cfg
+cp /usr/local/mfs/var/mfs/metadata.mfs.empty  /usr/local/mfs/var/mfs/metadata.mfs
+4.启动元数据服务器
+/usr/local/mfs/sbin/mfsmaster start
+working directory: /usr/local/mfs/var/mfs
+lockfile created and locked
+initializing mfsmaster modules ...
+loading sessions ... ok
+sessions file has been loaded
+exports file has been loaded
+mfstopology configuration file (/usr/local/mfs/etc/mfstopology.cfg) not found - using defaults
+loading metadata ...
+loading objects (files,directories,etc.) ... ok
+loading names ... ok
+loading deletion timestamps ... ok
+loading chunks data ... ok
+checking filesystem consistency ... ok
+connecting files and chunks ... ok
+all inodes: 1
+directory inodes: 1
+file inodes: 0
+chunks: 0
+metadata file has been loaded
+stats file has been loaded
+master <-> metaloggers module: listen on *:9419
+master <-> chunkservers module: listen on *:9420
+main master server module: listen on *:9421
+mfsmaster daemon initialized properly
+
+
+5.启动web页面
+/usr/local/mfs/sbin/mfscgiserv start        #开启WEB监控页面进程
+http://ip:9425查看mfs系统状态
+
+6.开机启动
+echo "/usr/local/mfs/sbin/mfsmaster start" /etc/rc.local
+echo "/usr/local/mfs/sbin/mfscgiserv" /etc/rc.local
+
+7.检查进程
+[root@localhost mfs]# ps -ef | grep mfs
+mfs        6556      1  0 03:20 ?        00:00:04 /usr/local/mfs/sbin/mfsmaster start
+root       6582      1  0 03:23 ?        00:00:00 python /usr/local/mfs/sbin/mfscgiserv
+root       6625   1692  0 04:39 pts/0    00:00:00 grep mfs
+二、mfschunk，mfslogger，mfsclient服务器配置
+
+1.创建安装用户
+useradd mfs -s /sbin/nologin
+2.安装
+yum -y install fuse fuse-devel
+
+tar -xf mfs-1.6.27-5.tar.gz && cd  mfs-1.6.27
+./configure --prefix=/usr/local/mfs --with-default-user=mfs --with-default-group=mfs --enable-mfsmount
+make && make install
+
+chown -R mfs.mfs /usr/local/mfs/
+
+3.配置文件
+cd /usr/local/mfs/etc/mfs/
+cp mfschunkserver.cfg.dist  mfschunkserver.cfg
+cp mfshdd.cfg.dist  mfshdd.cfg
+cp mfsmetalogger.cfg.dist  mfsmetalogger.cfg
+
+
+4.修改配置文件
+[root@localhost mfs]# cat mfschunkserver.cfg
+# WORKING_USER = mfs
+# WORKING_GROUP = mfs
+# SYSLOG_IDENT = mfschunkserver
+# LOCK_MEMORY = 0
+# NICE_LEVEL = -19
+
+# DATA_PATH = /usr/local/mfs/var/mfs
+
+# MASTER_RECONNECTION_DELAY = 5
+
+# BIND_HOST = *
+MASTER_HOST = 192.168.50.119
+MASTER_PORT = 9420
+
+# MASTER_TIMEOUT = 60
+
+# CSSERV_LISTEN_HOST = *
+# CSSERV_LISTEN_PORT = 9422
+
+# HDD_CONF_FILENAME = /usr/local/mfs/etc/mfs/mfshdd.cfg
+# HDD_TEST_FREQ = 10
+
+# deprecated, to be removed in MooseFS 1.7
+# LOCK_FILE = /var/run/mfs/mfschunkserver.lock
+# BACK_LOGS = 50
+# CSSERV_TIMEOUT = 5
+
+
+[root@localhost mfs]# cat mfshdd.cfg
+# mount points of HDD drives
+/usr/local/mfsdata/   #mfschunkserver上的分区，必须是独立分区！
+
+
+[root@localhost mfs]# cat mfsmetalogger.cfg
+# WORKING_USER = mfs
+# WORKING_GROUP = mfs
+# SYSLOG_IDENT = mfsmetalogger
+# LOCK_MEMORY = 0
+# NICE_LEVEL = -19
+
+# DATA_PATH = /usr/local/mfs/var/mfs
+
+# BACK_LOGS = 50
+# BACK_META_KEEP_PREVIOUS = 3
+META_DOWNLOAD_FREQ = 1
+
+# MASTER_RECONNECTION_DELAY = 5
+
+MASTER_HOST = 192.168.50.119
+MASTER_PORT = 9419
+
+# MASTER_TIMEOUT = 60
+
+# deprecated, to be removed in MooseFS 1.7
+# LOCK_FILE = /var/run/mfs/mfsmetalogger.lock
+
+
+5.启动服务
+
+[root@localhost mfs]# /usr/local/mfs/sbin/mfschunkserver  start
+working directory: /usr/local/mfs/var/mfs
+lockfile created and locked
+initializing mfschunkserver modules ...
+hdd space manager: path to scan: /usr/local/mfsdata/
+hdd space manager: start background hdd scanning (searching for available chunks)
+main server module: listen on *:9422
+no charts data file - initializing empty charts
+mfschunkserver daemon initialized properly
+
+
+[root@localhost mfs]# /usr/local/mfs/sbin/mfsmetalogger  start
+working directory: /usr/local/mfs/var/mfs
+lockfile created and locked
+initializing mfsmetalogger modules ...
+mfsmetalogger daemon initialized properly
+
+
+6.创建数据目录
+mkdir /usr/local/mfsdata/
+
+chown -R mfs.mfs /usr/local/mfsdata/
+
+这里需要一块新磁盘挂载到数据目录
+
+mount /dev/sdb1  /usr/local/mfsdata/
+
+
+7.创建挂载目录
+
+mkdir /mnt/mfs
+chown -R mfs.mfs /mnt/mfs/
+
+8.挂载目录
+[root@localhost mfsdata]# /usr/local/mfs/bin/mfsmount  /mnt/mfs/ -H 192.168.50.119   #挂载成功
+mfsmaster accepted connection with parameters: read-write,restricted_ip ; root mapped to root:root
+
+[root@localhost ~]# df 
+Filesystem                   1K-blocks    Used Available Use% Mounted on
+/dev/mapper/VolGroup-lv_root  19166504 1322824  16870064   8% /
+tmpfs                           243140       0    243140   0% /dev/shm
+/dev/sda1                       495844   32672    437572   7% /boot
+/dev/sdb1                     10317828  155256   9638456   2% /usr/local/mfsdata
+192.168.50.119:9421            9376256       0   9376256   0% /mnt/mfs
+
+参考地址：
+http://darren.blog.51cto.com/1081720/1143106
+http://sery.blog.51cto.com/10037/147756

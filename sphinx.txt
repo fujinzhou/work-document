@@ -1,0 +1,90 @@
+LNMP+sphinx实现大数据秒查
+
+Sphinx是由俄罗斯人Andrew Aksyonoff开发的一个全文检索引擎。意图为其他应用提供高速、低空间占用、高结果 相关度的全文搜索功能。Sphinx可以非常容易的与SQL数据库和脚本语言集成。当前系统内置MySQL和PostgreSQL 数据库数据源的支持，也支持从标准输入读取特定格式 的XML数据。
+
+Sphinx的特性如下：
+
+a)  高速的建立索引(在当代CPU上，峰值性能可达到10 MB/秒);
+
+b)  高性能的搜索(在2 – 4GB 的文本数据上，平均每次检索响应时间小于0.1秒);
+
+c)  可处理海量数据(目前已知可以处理超过100 GB的文本数据, 在单一CPU的系统上可处理100 M 文档);
+
+d)  提供了优秀的相关度算法，基于短语相似度和统计（BM25）的复合Ranking方法;
+
+e)  支持分布式搜索;
+
+f)  支持短语搜索
+
+g)  提供文档摘要生成
+
+h)  可作为MySQL的存储引擎提供搜索服务;
+
+i)  支持布尔、短语、词语相似度等多种检索模式;
+
+j)  文档支持多个全文检索字段(最大不超过32个);
+
+k)  文档支持多个额外的属性信息(例如：分组信息，时间戳等);
+
+l)  支持断词;
+
+虽然mysql的MYISAM提供全文索引，但是性能却不敢让人恭维，另外数据库毕竟不是很善于做这样的事情，我们需要把这些活让给更适合的程序去做，减少数据库的压力。因此采用Sphinx来做mysql的全文索引工具是一个很好的选择。这个星期主要来学习这个这个工具的使用，下面将学习过程大致的记录一下，做个备忘，也希望能对学习这个工具的其他朋友有所启发。
+
+1.安装sphinx
+wget http://sphinxsearch.com/files/sphinx-2.2.11-release.tar.gz
+tar -xf sphinx-2.2.11-release.tar.gz  && cd sphinx-2.2.11-release
+./configure  --prefix=/usr/local/spinx --with-mysql
+make && make install
+ln -s /usr/local/mysql/lib/libmysqlclient.so.18 /usr/lib64/
+
+libsphinxclient 安装（PHP模块需要）
+
+cd api/libsphinxclient
+./configure –prefix=/usr/local/sphinx
+make &&  make install
+
+2.安装php扩展
+
+wget http://pecl.php.net/get/sphinx-1.3.0.tgz
+tar zxf sphinx-1.3.3.tgz && cd sphinx-1.3.3
+./configure --with-php-config=/usr/local/php/bin/php-config --with-sphinx=/usr/local/sphinx/
+make &&  make install
+
+3.创建配置文件
+
+cp /usr/local/sphinx/etc/sphinx-min.conf.dist  /usr/local/sphinx/etc/sphinx.conf
+
+4.创建索引并启动
+
+/usr/local/spinx/bin/indexer  -c /usr/local/spinx/etc/sphinx.conf --all
+/usr/local/spinx/bin/searchd  -c /usr/local/spinx/etc/sphinx.conf
+
+5.查询验证
+
+cd /root/sphinx-2.2.11-release/api
+python test.py  test
+
+DEPRECATED: Do not call this method or, even better, use SphinxQL instead of an API
+Query 'test ' retrieved 3 of 3 matches in 0.000 sec
+Query stats:
+        'test' found 5 times in 3 documents
+
+Matches:
+1. doc_id=1, weight=2, group_id=1, date_added=2016-11-30 01:21:20
+2. doc_id=2, weight=2, group_id=1, date_added=2016-11-30 01:21:20
+3. doc_id=4, weight=1, group_id=2, date_added=2016-11-30 01:21:20
+
+
+mysql> select * from documents;
++----+----------+-----------+---------------------+-----------------+---------------------------------------------------------------------------+
+| id | group_id | group_id2 | date_added          | title           | content                                                                   |
++----+----------+-----------+---------------------+-----------------+---------------------------------------------------------------------------+
+|  1 |        1 |         5 | 2016-11-30 01:21:20 | test one        | this is my test document number one. also checking search within phrases. |
+|  2 |        1 |         6 | 2016-11-30 01:21:20 | test two        | this is my test document number two                                       |
+|  3 |        2 |         7 | 2016-11-30 01:21:20 | another doc     | this is another group                                                     |
+|  4 |        2 |         8 | 2016-11-30 01:21:20 | doc number four | this is to test groups                                                    |
++----+----------+-----------+---------------------+-----------------+---------------------------------------------------------------------------+
+
+参考网址：http://blog.csdn.net/wangjiuwang/article/details/52002172 
+                   http://www.cnblogs.com/findgor/p/5644540.html 
+                   http://www.sphinxsearch.org/sphinx-faq 

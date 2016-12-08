@@ -1,0 +1,242 @@
+Elasticsearch 是个开源分布式搜索引擎，它的特点有：分布式，零配置，自动发现，索引自动分片，索引副本机制，restful风格接口，多数据源，自动搜索负载等。
+Logstash 是一个完全开源的工具，他可以对你的日志进行收集、分析，并将其存储供以后使用（如，搜索）
+kibana 也是一个开源和免费的工具，他Kibana可以为 Logstash 和 ElasticSearch 提供的日志分析友好的 Web 界面，可以帮助您汇总、分析和搜索重要数据日志。
+
+环境：192.168.50.119：ELK+Nginx
+      192.168.50.120：Redis+Logstash
+
+ELK部署流程：
+192.168.50.119服务器
+1.安装JDK
+Logstash的运行依赖于Java运行环境， Logstash 1.5以上版本不低于java 7推荐使用最新版本的Java，我这里使用了1.8版本
+
+tar -zxf jdk-8u45-linux-x64.tar.gz -C /usr/local/
+设置环境变量 /etc/profile
+export JAVA_HOME=/usr/local/jdk1.8.0_45
+export PATH=$PATH:$JAVA_HOME/bin
+export CLASSPATH=.:$JAVA_HOME/lib/tools.jar:$JAVA_HOME/lib/dt.jar:$CLASSPATH
+
+source /etc/profile  #使环境变量生效
+
+验证是否安装成功
+[root@localhost ~]# java -version
+java version "1.8.0_45"
+Java(TM) SE Runtime Environment (build 1.8.0_45-b14)
+Java HotSpot(TM) 64-Bit Server VM (build 25.45-b02, mixed mode)
+
+
+2.安装Logstash（日志收集、分析，并将其存储供以后使用）
+wget https://download.elastic.co/logstash/logstash/logstash-2.4.0.tar.gz
+tar –zxf logstash-2.4.0.tar.gz -C /usr/local/
+
+
+验证logstash是否安装成功
+
+[root@localhost ~]# /usr/local/logstash-2.4.0/bin/logstash -e 'input { stdin { } } output { stdout {} }'
+Settings: Default pipeline workers: 1
+Logstash startup completed
+等待输入:hello world
+2016-11-28T20:32:07.853Z localhost.localdomain hello world
+我们可以看到，我们输入什么内容logstash按照某种格式输出，其中-e参数参数允许Logstash直接通过命令行接受设置。
+这点尤其快速的帮助我们反复的测试配置是否正确而不用写配置文件。使用CTRL-C命令可以退出之前运行的Logstash。
+
+部署nginx并收集日志
+yum -y install nginx
+设置nginx的log 格式
+vim /etc/nginx/nginx.conf
+    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                      '$status $body_bytes_sent "$http_referer" '
+                      '"$http_user_agent" $http_x_forwarded_for $request_length $msec $connection_requests $request_time';
+
+
+service nginx start
+
+mkdir /usr/local/logstash-2.4.0/conf/   #创建logstash配置目录
+
+定义收集logstash配置文件
+[root@localhost conf]# cat logstash_nginx.conf 
+input {
+     file {
+        path => ["/var/log/nginx/access.log"]
+        type => "nginx_log"
+     }
+}
+output {
+     redis{
+         host => "192.168.50.120"
+         key => 'logstash-redis'
+         data_type => 'list'
+    }
+    stdout {
+codec => rubydebug
+    }
+}
+
+安装部署redis    192.168.50.120
+yum -y install redis
+vim /etc/redis.conf
+bind 192.168.50.120
+
+[root@localhost conf]# /usr/local/logstash-2.4.0/bin/logstash -f ./logstash_nginx.conf  --configtest   #检查配置文件
+Configuration OK
+
+[root@localhost conf]# /usr/local/logstash-2.4.0/bin/logstash agent  -f ./logstash_nginx.conf          #将日志信息输出到redis服务器
+Settings: Default pipeline workers: 1
+Logstash startup completed
+{
+       "message" => "192.168.50.114 - - [29/Nov/2016:00:58:43 +0800] \"GET / HTTP/1.1\" 304 0 \"-\" \"Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.99 Safari/537.36\" \"-\"",
+      "@version" => "1",
+    "@timestamp" => "2016-11-28T18:55:49.587Z",
+          "path" => "/var/log/nginx/access.log",
+          "host" => "localhost.localdomain",
+          "type" => "nginx_log"
+}
+{
+       "message" => "192.168.50.114 - - [29/Nov/2016:00:58:43 +0800] \"GET /nginx-logo.png HTTP/1.1\" 304 0 \"http://192.168.50.119/\" \"Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.99 Safari/537.36\" \"-\"",
+      "@version" => "1",
+    "@timestamp" => "2016-11-28T18:55:49.590Z",
+          "path" => "/var/log/nginx/access.log",
+          "host" => "localhost.localdomain",
+          "type" => "nginx_log"
+}
+{
+       "message" => "192.168.50.114 - - [29/Nov/2016:00:58:43 +0800] \"GET /poweredby.png HTTP/1.1\" 304 0 \"http://192.168.50.119/\" \"Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.99 Safari/537.36\" \"-\"",
+      "@version" => "1",
+    "@timestamp" => "2016-11-28T18:55:49.590Z",
+          "path" => "/var/log/nginx/access.log",
+          "host" => "localhost.localdomain",
+          "type" => "nginx_log"
+}
+
+安装部署Elasticsearch 
+1.创建安装用户
+groupadd elk
+useradd es -g elk
+
+tar -xf elasticsearch-2.2.0.tar.gz -C /usr/local/
+修改配置文件 /usr/local/elasticsearch-2.2.0/config/elasticsearch.yml
+   network.host: 192.168.50.119   # 端口绑定ip地址
+   http.port: 9200
+
+2.启动
+这里遇到一个坑：es用户默认是不能用root用户启动的。所以要切到普通用户启动
+
+chown -R es.elk /usr/local/elasticsearch-2.2.0
+su - es
+nohup  /usr/local/elasticsearch-2.2.0/bin/elasticsearch >/usr/local/elasticsearch-2.2.0/nohub &
+
+[root@localhost ELK]# netstat -tunpl | grep 9200
+tcp        0      0 ::ffff:192.168.50.119:9200  :::*                        LISTEN      2183/java           
+
+[root@localhost ELK]# curl http://192.168.50.119:9200   #查看状态
+{
+  "name" : "Blood Brothers",
+  "cluster_name" : "elasticsearch",
+  "version" : {
+    "number" : "2.2.0",
+    "build_hash" : "8ff36d139e16f8720f2947ef62c8167a888992fe",
+    "build_timestamp" : "2016-01-27T13:32:39Z",
+    "build_snapshot" : false,
+    "lucene_version" : "5.4.1"
+  },
+  "tagline" : "You Know, for Search"
+}
+
+
+3.安装es插件
+[root@localhost conf]# cd /usr/local/elasticsearch-2.2.0/bin/
+
+[root@localhost bin]# ./plugin  install lmenezes/elasticsearch-kopf
+-> Installing lmenezes/elasticsearch-kopf...
+Trying https://github.com/lmenezes/elasticsearch-kopf/archive/master.zip ...
+Downloading ............................................................ DONE
+Verifying https://github.com/lmenezes/elasticsearch-kopf/archive/master.zip checksums if available ...
+NOTE: Unable to verify checksum for downloaded plugin (unable to find .sha1 or .md5 file to verify)
+Installed kopf into /usr/local/elasticsearch-2.2.0/plugins/kopf
+
+[root@localhost bin]# ./plugin install mobz/elasticsearch-head
+-> Installing mobz/elasticsearch-head...
+Trying https://github.com/mobz/elasticsearch-head/archive/master.zip ...
+Downloading .........................................................DONE
+NOTE: Unable to verify checksum for downloaded plugin (unable to find .sha1 or .md5 file to verify)
+Installed head into /usr/local/elasticsearch-2.2.0/plugins/head
+
+
+安装kibana 
+1.安装
+[root@localhost ELK]# tar -xf kibana-4.4.0-linux-x64.tar.gz  -C /usr/local/
+[root@localhost ELK]# cd /usr/local/kibana-4.4.0-linux-x64/
+2.配置
+[root@localhost kibana-4.4.0-linux-x64]# vim config/kibana.yml
+elasticsearch.url: "http://192.168.50.119:9200"
+server.port: 5601
+server.host: "0.0.0.0"
+
+3.启动
+nohup  /usr/local/kibana-4.4.0-linux-x64/bin/kibana > /usr/local/kibana-4.4.0-linux-x64/nohub.out &
+
+[root@localhost ELK]# netstat -tunpl | grep 5601
+tcp        0      0 0.0.0.0:5601                0.0.0.0:*                   LISTEN      2698/node      
+
+[root@localhost kibana-4.4.0-linux-x64]# nohup  /usr/local/kibana-4.4.0-linux-x64/bin/kibana > /usr/local/kibana-4.4.0-linux-x64/nohub.out &
+
+4.浏览器访问http://192.168.50.119:5601/
+
+
+安装logstash-server服务器 192.168.50.120
+
+1.安装jdk和logstash
+
+tar -zxf jdk-8u45-linux-x64.tar.gz -C /usr/local/
+设置环境变量 /etc/profile
+export JAVA_HOME=/usr/local/jdk1.8.0_45
+export PATH=$PATH:$JAVA_HOME/bin
+export CLASSPATH=.:$JAVA_HOME/lib/tools.jar:$JAVA_HOME/lib/dt.jar:$CLASSPATH
+
+source /etc/profile  #使环境变量生效
+
+tar –zxf logstash-2.4.0.tar.gz -C /usr/local/
+mkdir /usr/local/logstash-2.4.0/conf
+
+将redis 中的数据发送到elasticsearch中
+[root@localhost conf]# cat logstash_server.conf 
+input {
+    redis {
+        port => "6379"
+        host => "192.168.50.120"
+        data_type => "list"
+        key => "logstash-redis"
+        type => "redis-input"
+   }
+}
+output {
+    elasticsearch {
+        hosts => "192.168.50.119"
+        index => "logstash-%{+YYYY.MM.dd}"
+   }
+}
+
+
+
+es常规操作
+
+es 健康状态
+[root@localhost ~]# curl  http://192.168.50.119:9200/_cat/health?v
+epoch      timestamp cluster       status node.total node.data shards pri relo init unassign pending_tasks max_task_wait_time active_shards_percent 
+1480345315 23:01:55  elasticsearch yellow          1         1      6   6    0    0        6             0                  -                 50.0% 
+
+health 的状态包括：green, yellow, red. 
+
+列出节点
+[root@localhost ~]# curl  http://192.168.50.119:9200/_cat/nodes?v
+host           ip             heap.percent ram.percent load node.role master name           
+192.168.50.119 192.168.50.119            8          99 0.00 d         *      Blood Brothers 
+
+列出索引
+[root@localhost ~]# curl  http://192.168.50.119:9200/_cat/indices?v
+health status index               pri rep docs.count docs.deleted store.size pri.store.size 
+yellow open   .kibana               1   1          2            0      5.6kb          5.6kb 
+yellow open   logstash-2016.11.28   5   1          1            0      4.9kb          4.9kb 
+
+
+参考地址：http://liumissyou.blog.51cto.com/4828343/1850973   http://ckl893.blog.51cto.com/8827818/1772287 

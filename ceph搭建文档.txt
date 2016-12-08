@@ -1,0 +1,378 @@
+ceph介绍
+Ceph是统一存储系统，支持三种接口。
+Object：有原生的API，而且也兼容Swift和S3的API
+Block：支持精简配置、快照、克隆
+File：Posix接口，支持快照
+Ceph也是分布式存储系统，它的特点是：
+高扩展性：使用普通x86服务器，支持10~1000台服务器，支持TB到PB级的扩展。
+高可靠性：没有单点故障，多数据副本，自动管理，自动修复。
+高性能：数据分布均衡，并行化度高。对于objects storage和block storage,不需要元数据服务器。
+
+
+1.环境：三台装有Centos7的 主机，每个主机有三个磁盘（虚拟机磁盘要大于100G）
+[root@mon-1 cluster]# cat /etc/redhat-release 
+CentOS Linux release 7.2.1511 (Core) 
+[root@mon-1 cluster]# lsblk 
+[root@mon-1 ~]# lsblk 
+NAME            MAJ:MIN RM  SIZE RO TYPE MOUNTPOINT
+fd0               2:0    1    4K  0 disk 
+sda               8:0    0   20G  0 disk 
+├─sda1            8:1    0  500M  0 part /boot
+└─sda2            8:2    0 19.5G  0 part 
+  ├─centos-root 253:0    0 18.5G  0 lvm  /
+  └─centos-swap 253:1    0    1G  0 lvm  [SWAP]
+sdb               8:16   0  200G  0 disk 
+sdc               8:32   0  200G  0 disk 
+sdd               8:48   0  200G  0 disk 
+sr0              11:0    1  603M  0 rom  
+
+修改主机名并添加hosts
+vim /etc/hostname     #由于7和6.5修改主机名的方法不一样，这里举个例子
+mon-1
+[root@osd-1 ceph-osd-1]# cat /etc/hosts
+192.168.50.123  mon-1
+192.168.50.124  osd-1
+192.168.50.125  osd-2
+配置ssh无密码登陆
+[root@localhost ~]# ssh-keygen  -t rsa -P ''
+Generating public/private rsa key pair.
+Enter file in which to save the key (/root/.ssh/id_rsa): 
+Your identification has been saved in /root/.ssh/id_rsa.
+Your public key has been saved in /root/.ssh/id_rsa.pub.
+The key fingerprint is:
+62:b0:4c:aa:e5:37:92:89:4d:db:c3:38:e2:f1:2a:d6 root@admin-node
+The key's randomart image is:
++--[ RSA 2048]----+
+|                 |
+|                 |
+|    o            |
+|   + o           |
+|  + o o S        |
+| B B . .         |
+|+.@ *            |
+|oooE o           |
+|oo..             |
++-----------------+
+ssh-copy-id mon-1
+ssh-copy-id osd-1
+ssh-copy-id osd-2
+
+
+2.集群配置
+主机	IP	功能
+mon-1	192.168.57.222	deploy、mon*1、osd*3
+osd-1	192.168.57.223	mon*1、 osd*3
+osd-2	192.168.57.224	mon*1 、osd*3
+
+3.环境清理
+如果之前部署失败了，不必删除ceph客户端，或者重新搭建虚拟机，只需要在每个节点上执行如下指令即可将环境清理至刚安装完ceph客户端时的状态！强烈建议在旧集群上搭建之前清理干净环境，否则会发生各种异常情况。
+ps aux|grep ceph |awk '{print $2}'|xargs kill -9
+ps -ef|grep ceph
+#确保此时所有ceph进程都已经关闭！！！如果没有关闭，多执行几次。
+umount /var/lib/ceph/osd/*
+rm -rf /var/lib/ceph/osd/*
+rm -rf /var/lib/ceph/mon/*
+rm -rf /var/lib/ceph/mds/*
+rm -rf /var/lib/ceph/bootstrap-mds/*
+rm -rf /var/lib/ceph/bootstrap-osd/*
+rm -rf /var/lib/ceph/bootstrap-mon/*
+rm -rf /var/lib/ceph/tmp/*
+rm -rf /etc/ceph/*
+rm -rf /var/run/ceph/*
+
+安装部署流程
+
+yum源及ceph的安装
+需要在每个主机上执行以下命令
+yum clean all
+rm -rf /etc/yum.repos.d/*.repo
+wget -O /etc/yum.repos.d/CentOS-Base.repo http://mirrors.aliyun.com/repo/Centos-7.repo
+wget -O /etc/yum.repos.d/epel.repo http://mirrors.aliyun.com/repo/epel-7.repo
+sed -i '/aliyuncs/d' /etc/yum.repos.d/CentOS-Base.repo
+sed -i '/aliyuncs/d' /etc/yum.repos.d/epel.repo
+sed -i 's/$releasever/7.2.1511/g' /etc/yum.repos.d/CentOS-Base.repo
+增加ceph源
+vim /etc/yum.repos.d/ceph.repo
+[ceph]
+name=ceph
+baseurl=http://mirrors.aliyun.com/ceph/rpm-jewel/el7/x86_64/
+gpgcheck=0
+[ceph-noarch]
+name=cephnoarch
+baseurl=http://mirrors.aliyun.com/ceph/rpm-jewel/el7/noarch/
+gpgcheck=0
+安装ceph客户端
+yum -y install ceph ceph-radosgw ntp ntpdate
+关闭selinux和firewalld
+sed -i 's/SELINUX=.*/SELINUX=disabled/' /etc/selinux/config   #重启机器
+systemctl stop firewalld 
+systemctl disable firewalld
+
+同步各个节点时间：
+
+ntpdate  -s time-a.nist.gov
+echo ntpdate  -s time-a.nist.gov >> /etc/rc.d/rc.local 
+echo "01 01 * * * /usr/sbin/ntpdate -s time-a.nist.gov    >> /dev/null 2>&1" >> /etc/crontab
+开始部署
+在部署节点(mon-1)安装ceph-deploy，下文的部署节点统一指mon-1:
+[root@mon-1 ~]# yum -y install ceph-deploy
+[root@mon-1 ~]# ceph-deploy --version
+1.5.36
+[root@mon-1 ~]# ceph -v
+ceph version 10.2.3 (ecc23778eb545d8dd55e2e4735b53cc93f92e65b)
+在部署节点创建部署目录
+[root@mon-1 ~]# mkdir cluster
+[root@mon-1 ~]# cd cluster
+[root@mon-1 cluster]# ceph-deploy new mon-1 osd-1 osd-2
+[ceph_deploy.conf][DEBUG ] found configuration file at: /root/.cephdeploy.conf
+[ceph_deploy.cli][INFO  ] Invoked (1.5.36): /usr/bin/ceph-deploy new mon-1 osd-1 osd-2
+[ceph_deploy.cli][INFO  ] ceph-deploy options:
+[ceph_deploy.cli][INFO  ]  username                      : None
+[ceph_deploy.cli][INFO  ]  func                          : <function new at 0x1803230>
+[ceph_deploy.cli][INFO  ]  verbose                       : False
+[ceph_deploy.cli][INFO  ]  overwrite_conf                : False
+[ceph_deploy.cli][INFO  ]  quiet                         : False
+[ceph_deploy.cli][INFO  ]  cd_conf                       : <ceph_deploy.conf.cephdeploy.Conf instance at 0x186d440>
+[ceph_deploy.cli][INFO  ]  cluster                       : ceph
+[ceph_deploy.cli][INFO  ]  ssh_copykey                   : True
+[ceph_deploy.cli][INFO  ]  mon                           : ['mon-1', 'osd-1', 'osd-2']
+[ceph_deploy.cli][INFO  ]  public_network                : None
+[ceph_deploy.cli][INFO  ]  ceph_conf                     : None
+[ceph_deploy.cli][INFO  ]  cluster_network               : None
+[ceph_deploy.cli][INFO  ]  default_release               : False
+[ceph_deploy.cli][INFO  ]  fsid                          : None
+[ceph_deploy.new][DEBUG ] Creating new cluster named ceph
+[ceph_deploy.new][INFO  ] making sure passwordless SSH succeeds
+[ceph_deploy.new][DEBUG ] Writing initial config to ceph.conf...   #如果能准确无误的走到这一步就算成功了
+目录内容如下
+[root@mon-1 cluster]# ll
+total 12
+-rw-r--r-- 1 root root  197 Dec  6 02:24 ceph.conf
+-rw-r--r-- 1 root root 2921 Dec  6 02:24 ceph-deploy-ceph.log
+-rw------- 1 root root   73 Dec  6 02:24 ceph.mon.keyring
+
+根据自己的IP配置向ceph.conf中添加public_network，并稍微增大mon之间时差允许范围(默认为0.05s，现改为2s)：
+[root@mon-1 cluster]# echo public_network=192.168.50.0/24 >>ceph.conf 
+[root@mon-1 cluster]# echo mon_clock_drift_allowed = 2 >> ceph.conf 
+[root@mon-1 cluster]# cat ceph.conf 
+[global]
+fsid = 0865fe85-1655-4208-bed6-274cae945746
+mon_initial_members = mon-1, osd-1, osd-2
+mon_host = 192.168.50.123,192.168.50.124,192.168.50.125
+auth_cluster_required = cephx
+auth_service_required = cephx
+auth_client_required = cephx
+public_network=192.168.50.0/24
+mon_clock_drift_allowed = 2
+
+部署监控节点
+
+[root@mon-1 cluster]# ceph-deploy  mon create-initial
+[ceph_deploy.conf][DEBUG ] found configuration file at: /root/.cephdeploy.conf
+[ceph_deploy.cli][INFO  ] Invoked (1.5.36): /usr/bin/ceph-deploy mon create-initial
+[ceph_deploy.cli][INFO  ] ceph-deploy options:
+[ceph_deploy.cli][INFO  ]  username                      : None
+[ceph_deploy.cli][INFO  ]  verbose                       : False
+[ceph_deploy.cli][INFO  ]  overwrite_conf                : False
+[ceph_deploy.cli][INFO  ]  subcommand                    : create-initial
+[ceph_deploy.cli][INFO  ]  quiet                         : False
+[ceph_deploy.cli][INFO  ]  cd_conf                       : <ceph_deploy.conf.cephdeploy.Conf instance at 0x2023fc8>
+[ceph_deploy.cli][INFO  ]  cluster                       : ceph
+[ceph_deploy.cli][INFO  ]  func                          : <function mon at 0x201d140>
+[ceph_deploy.cli][INFO  ]  ceph_conf                     : None
+[ceph_deploy.cli][INFO  ]  default_release               : False
+[ceph_deploy.cli][INFO  ]  keyrings                      : None
+[ceph_deploy.mon][DEBUG ] Deploying mon, cluster ceph hosts mon-1 osd-1 osd-2
+......省略
+[ceph_deploy.gatherkeys][INFO  ] Storing ceph.client.admin.keyring
+[ceph_deploy.gatherkeys][INFO  ] Storing ceph.bootstrap-mds.keyring
+[ceph_deploy.gatherkeys][INFO  ] keyring 'ceph.mon.keyring' already exists
+[ceph_deploy.gatherkeys][INFO  ] Storing ceph.bootstrap-osd.keyring
+[ceph_deploy.gatherkeys][INFO  ] Storing ceph.bootstrap-rgw.keyring
+[ceph_deploy.gatherkeys][INFO  ] Destroy temp directory /tmp/tmpVLiIFr
+目录内容如下
+[root@mon-1 cluster]# ll
+total 76
+-rw------- 1 root root   113 Dec  6 22:49 ceph.bootstrap-mds.keyring
+-rw------- 1 root root   113 Dec  6 22:49 ceph.bootstrap-osd.keyring
+-rw------- 1 root root   113 Dec  6 22:49 ceph.bootstrap-rgw.keyring
+-rw------- 1 root root   129 Dec  6 22:49 ceph.client.admin.keyring
+-rw-r--r-- 1 root root   300 Dec  6 22:47 ceph.conf
+-rw-r--r-- 1 root root 50531 Dec  6 22:49 ceph-deploy-ceph.log
+-rw------- 1 root root    73 Dec  6 22:46 ceph.mon.keyring
+查看集群状态
+[root@mon-1 ceph]# ceph -s
+    cluster 1b27aaf2-8b29-49b1-b50e-7ccb1f72d1fa
+     health HEALTH_ERR
+            no osds
+     monmap e1: 1 mons at {mon-1=192.168.50.123:6789/0}
+            election epoch 3, quorum 0 mon-1
+     osdmap e1: 0 osds: 0 up, 0 in
+            flags sortbitwise
+      pgmap v2: 64 pgs, 1 pools, 0 bytes data, 0 objects
+            0 kB used, 0 kB / 0 kB avail
+                  64 creating
+开始部署OSD：
+[root@mon-1 cluster]# ceph-deploy  --overwrite-conf osd prepare  mon-1:/dev/sdb  mon-1:/dev/sdc  mon-1:/dev/sdd osd-1:/dev/sdb  osd-1:/dev/sdc  osd-1:/dev/sdd  osd-2:/dev/sdb  osd-2:/dev/sdc  osd-2:/dev/sdd  --zap-disk
+这里部署osd-2有问题 ，删除程序和目录，重新分区以后成功创建osd-2
+ceph-deploy  --overwrite-conf osd prepare  osd-2:/dev/sdb  osd-2:/dev/sdc  osd-2:/dev/sdd
+[root@mon-1 ~]# lsblk 
+NAME            MAJ:MIN RM  SIZE RO TYPE MOUNTPOINT
+fd0               2:0    1    4K  0 disk 
+sda               8:0    0   20G  0 disk 
+├─sda1            8:1    0  500M  0 part /boot
+└─sda2            8:2    0 19.5G  0 part 
+  ├─centos-root 253:0    0 18.5G  0 lvm  /
+  └─centos-swap 253:1    0    1G  0 lvm  [SWAP]
+sdb               8:16   0    2T  0 disk 
+├─sdb1            8:17   0    2T  0 part /var/lib/ceph/osd/ceph-0
+└─sdb2            8:18   0    5G  0 part 
+sdc               8:32   0    2T  0 disk 
+├─sdc1            8:33   0    2T  0 part /var/lib/ceph/osd/ceph-1
+└─sdc2            8:34   0    5G  0 part 
+sdd               8:48   0    2T  0 disk 
+├─sdd1            8:49   0    2T  0 part /var/lib/ceph/osd/ceph-2
+└─sdd2            8:50   0    5G  0 part 
+sr0              11:0    1  603M  0 rom  
+
+[root@osd-1 ~]# lsblk 
+NAME            MAJ:MIN RM  SIZE RO TYPE MOUNTPOINT
+fd0               2:0    1    4K  0 disk 
+sda               8:0    0   20G  0 disk 
+├─sda1            8:1    0  500M  0 part /boot
+└─sda2            8:2    0 19.5G  0 part 
+  ├─centos-root 253:0    0 18.5G  0 lvm  /
+  └─centos-swap 253:1    0    1G  0 lvm  [SWAP]
+sdb               8:16   0    2T  0 disk 
+├─sdb1            8:17   0    2T  0 part /var/lib/ceph/osd/ceph-3
+└─sdb2            8:18   0    5G  0 part 
+sdc               8:32   0    2T  0 disk 
+├─sdc1            8:33   0    2T  0 part /var/lib/ceph/osd/ceph-4
+└─sdc2            8:34   0    5G  0 part 
+sdd               8:48   0    2T  0 disk 
+├─sdd1            8:49   0    2T  0 part /var/lib/ceph/osd/ceph-5
+└─sdd2            8:50   0    5G  0 part 
+sr0              11:0    1  603M  0 rom  
+[root@osd-2 ~]# lsblk 
+NAME            MAJ:MIN RM  SIZE RO TYPE MOUNTPOINT
+fd0               2:0    1    4K  0 disk 
+sda               8:0    0   20G  0 disk 
+├─sda1            8:1    0  500M  0 part /boot
+└─sda2            8:2    0 19.5G  0 part 
+  ├─centos-root 253:0    0 18.5G  0 lvm  /
+  └─centos-swap 253:1    0    1G  0 lvm  [SWAP]
+sdb               8:16   0    2T  0 disk 
+├─sdb1            8:17   0    2T  0 part /var/lib/ceph/osd/ceph-6
+└─sdb2            8:18   0    5G  0 part 
+sdc               8:32   0    2T  0 disk 
+├─sdc1            8:33   0    2T  0 part /var/lib/ceph/osd/ceph-7
+└─sdc2            8:34   0    5G  0 part 
+sdd               8:48   0    2T  0 disk 
+├─sdd1            8:49   0    2T  0 part /var/lib/ceph/osd/ceph-8
+└─sdd2            8:50   0    5G  0 part 
+sr0              11:0    1  603M  0 rom  
+
+在osd-2上重新添加mon
+[root@mon-1 cluster]# ceph-deploy  mon create osd-2
+查看集群状态
+[root@mon-1 cluster]# ceph -s
+    cluster f25ad2c5-fd2a-4fcc-a522-344eb498fee5
+     health HEALTH_WARN
+            too few PGs per OSD (21 < min 30)
+     monmap e1: 3 mons at {mon-1=192.168.50.123:6789/0,osd-1=192.168.50.124:6789/0,osd-2=192.168.50.125:6789/0}
+            election epoch 12, quorum 0,1,2 mon-1,osd-1,osd-2
+     osdmap e52: 9 osds: 9 up, 9 in
+            flags sortbitwise
+      pgmap v129: 64 pgs, 1 pools, 0 bytes data, 0 objects
+            306 MB used, 1753 GB / 1754 GB avail
+                  64 active+clean
+这里有个WARN，去掉这个WARN只需要增加rbd池的PG就好
+
+[root@mon-1 cluster]# ceph osd pool set rbd pg_num 128
+set pool 0 pg_num to 128
+[root@mon-1 cluster]# ceph osd pool set rbd pgp_num 128
+set pool 0 pgp_num to 128				  
+
+[root@mon-1 cluster]# ceph -s
+    cluster 0865fe85-1655-4208-bed6-274cae945746
+     health HEALTH_OK
+     monmap e3: 2 mons at {mon-1=192.168.50.123:6789/0,osd-1=192.168.50.124:6789/0}
+            election epoch 30, quorum 0,1 mon-1,osd-1
+     osdmap e58: 9 osds: 9 up, 9 in
+            flags sortbitwise
+      pgmap v161: 128 pgs, 1 pools, 0 bytes data, 0 objects
+            310 MB used, 18377 GB / 18378 GB avail
+                 128 active+clean
+给各个节点推送config配置
+			
+请不要直接修改某个节点的/etc/ceph/ceph.conf文件的，而是要去部署节点(此处为ceph-1:/root/cluster/ceph.conf)目录下修改。因为节点到几十个的时候，不可能一个个去修改的，采用推送的方式快捷安全！
+修改完毕后，执行如下指令，将conf文件推送至各个节点：
+[root@mon-1 cluster]# ceph-deploy --overwrite-conf config push mon-1 osd-1 osd-2
+[ceph_deploy.conf][DEBUG ] found configuration file at: /root/.cephdeploy.conf
+[ceph_deploy.cli][INFO  ] Invoked (1.5.36): /usr/bin/ceph-deploy admin mon-1 osd-1 osd-2
+[ceph_deploy.cli][INFO  ] ceph-deploy options:
+[ceph_deploy.cli][INFO  ]  username                      : None
+[ceph_deploy.cli][INFO  ]  verbose                       : False
+[ceph_deploy.cli][INFO  ]  overwrite_conf                : False
+[ceph_deploy.cli][INFO  ]  quiet                         : False
+[ceph_deploy.cli][INFO  ]  cd_conf                       : <ceph_deploy.conf.cephdeploy.Conf instance at 0x1a34e18>
+[ceph_deploy.cli][INFO  ]  cluster                       : ceph
+[ceph_deploy.cli][INFO  ]  client                        : ['mon-1', 'osd-1', 'osd-2']
+[ceph_deploy.cli][INFO  ]  func                          : <function admin at 0x1964f50>
+[ceph_deploy.cli][INFO  ]  ceph_conf                     : None
+[ceph_deploy.cli][INFO  ]  default_release               : False
+[ceph_deploy.admin][DEBUG ] Pushing admin keys and conf to mon-1
+[mon-1][DEBUG ] connected to host: mon-1 
+[mon-1][DEBUG ] detect platform information from remote host
+[mon-1][DEBUG ] detect machine type
+[mon-1][DEBUG ] write cluster configuration to /etc/ceph/{cluster}.conf
+[root@mon-1 cluster]# ceph-deploy --overwrite-conf config push ceph-1 ceph-2 ceph-3
+[ceph_deploy.admin][DEBUG ] Pushing admin keys and conf to osd-1
+[osd-1][DEBUG ] connected to host: osd-1 
+[osd-1][DEBUG ] detect platform information from remote host
+[osd-1][DEBUG ] detect machine type
+[osd-1][DEBUG ] write cluster configuration to /etc/ceph/{cluster}.conf
+[ceph_deploy.admin][DEBUG ] Pushing admin keys and conf to osd-2
+[osd-2][DEBUG ] connected to host: osd-2 
+[osd-2][DEBUG ] detect platform information from remote host
+[osd-2][DEBUG ] detect machine type
+[osd-2][DEBUG ] write cluster configuration to /etc/ceph/{cluster}.conf
+
+
+此时，需要重启各个节点的monitor服务
+
+mon和osd的启动方式
+#mon-1为各个monitor所在节点的主机名。
+systemctl start ceph-mon@mon-1.service 
+systemctl restart ceph-mon@mon-1.service
+systemctl stop ceph-mon@mon-1.service
+#0为该节点的OSD的id，可以通过`ceph osd tree`查看
+systemctl start/stop/restart ceph-osd@0.service
+
+
+
+参考网址：
+http://xuxiaopang.com/2016/10/09/ceph-quick-install-el7-jewel/  
+http://bbs.ceph.org.cn/question/205  
+http://www.docoreos.com/?p=86 
+http://www.voidcn.com/blog/xiangpingli/article/p-5979182.html  
+
+1. Monitor clock skew detected 
+[root@mon-1 cluster]# ceph -s
+    cluster f25ad2c5-fd2a-4fcc-a522-344eb498fee5
+     health HEALTH_ERR
+            clock skew detected on mon.osd-2
+            64 pgs are stuck inactive for more than 300 seconds
+            64 pgs stuck inactive
+            no osds
+            Monitor clock skew detected 
+添加配置参数：              
+vim /etc/ceph/ceph.conf
+mon clock drift allowed = 2
+mon clock drift warn backoff = 30    
+同步配置文件
+ceph-deploy --overwrite-conf admin osd-1 osd-2
+重启mon服务
+systemctl restart ceph-mon@osd-2.service
+问题总结：
+本问题主要是mon节点服务器，时间偏差比较大导致，本次遇到问题为测试环境，通过修改ceph对时间偏差阀值，规避的告警信息，线上业务环境，注意排查服务器时间同步问题。       
