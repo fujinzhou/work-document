@@ -1,0 +1,194 @@
+1.基本环境：
+操作系统：
+    Centos 7.2.1511
+jdk环境
+版本：jdk-8u45-linux-x64.rpm
+mysql环境：
+rpm包：http://ftp.ntu.edu.tw/MySQL/Downloads/MySQL-5.6/MySQL-5.6.33-1.linux_glibc2.5.x86_64.rpm-bundle.tar
+jdbc链接包：http://101.96.10.72/cdn.mysql.com//Downloads/Connector-J/mysql-connector-java-5.1.40.tar.gz
+CDH安装相关的包:
+cloudera manager包：http://archive.cloudera.com/cm5/cm/5/cloudera-manager-centos7-cm5.8.3_x86_64.tar.gz
+CDH包:http://archive.cloudera.com/cdh5/parcels/5.8.3/CDH-5.8.3-1.cdh5.8.3.p0.2-el7.parcel.sha1
+http://archive.cloudera.com/cdh5/parcels/5.8.3/CDH-5.8.3-1.cdh5.8.3.p0.2-el7.parcel
+http://archive.cloudera.com/cdh5/parcels/5.8.3/manifest.json
+
+集群规划
+IP地址 	主机名	说明
+192.168.160.130	hadoop1	主节点master,datanode
+192.168.160.131	hadoop2	datanode
+192.168.160.132	hadoop3 datanode
+
+开始安装前配置
+1.安装jdk（每个机器都要装）
+安装前要先卸载掉原有的jdk版本，避免造成冲突
+2.修改三个机器上面的hosts
+
+192.168.50.123  hadoop1
+192.168.50.124  hadoop2
+192.168.50.125  hadoop3
+
+3.同步时间
+
+ntpdate -s  pool.ntp.org
+
+4.关闭防火墙和selinux
+sed -i 's/SELINUX=.*/SELINUX=disabled/' /etc/selinux/config   #重启机器
+systemctl stop firewalld 
+systemctl disable firewalld
+
+5.配置ssh无密码登陆
+[root@localhost ~]# ssh-keygen  -t rsa -P ''
+Generating public/private rsa key pair.
+Enter file in which to save the key (/root/.ssh/id_rsa): 
+Your identification has been saved in /root/.ssh/id_rsa.
+Your public key has been saved in /root/.ssh/id_rsa.pub.
+The key fingerprint is:
+62:b0:4c:aa:e5:37:92:89:4d:db:c3:38:e2:f1:2a:d6 root@admin-node
+The key's randomart image is:
++--[ RSA 2048]----+
+|                 |
+|                 |
+|    o            |
+|   + o           |
+|  + o o S        |
+| B B . .         |
+|+.@ *            |
+|oooE o           |
+|oo..             |
++-----------------+
+
+ssh-copy-id hadoop1
+ssh-copy-id hadoop2
+ssh-copy-id hadoop3
+
+
+6.安装mysql
+[root@hadoop1]#tar -xvf MySQL-5.6.33-1.linux_glibc2.5.x86_64.rpm-bundle.tar
+[root@hadoop1]#rpm -ivh MySQL-*.rpm
+修改配置文件路径：cp /usr/share/mysql/my-default.cnf /etc/my.cnf 
+
+#配置mysql
+[root@hadoop1]#vim /etc/my.cnf
+[mysqld]
+default-storage-engine = innodb
+innodb_file_per_table
+collation-server = utf8_general_ci
+init-connect = 'SET NAMES utf8'
+character-set-server = utf8
+
+#初始化数据库
+
+/usr/local/mysql/scripts/mysql_install_db  --basedir=/usr/local/mysql/ --datadir=/data/mysql/ --user=mysql  >>/dev/null
+
+#启动mysql
+service mysqld start
+chkconfig mysqld on
+
+- 查看mysql root初始化密码
+[root@hadoop1]# cat /root/.mysql_secret
+# The random password set for the root user at Fri Sep 16 11:13:25 2016 (local time): 9mp7uYFmgt6drdq3
+- 登录进行去更改密码
+[root@hadoop1]# mysql -u root -p
+mysql> SET PASSWORD=PASSWORD('123456');
+- 允许mysql远程访问
+mysql> grant all on *.* to root@"%" Identified by "www.123";
+Query OK, 1 row affected (0.05 sec)
+mysql> flush privileges;
+Query OK, 0 rows affected (0.00 sec)
+
+创建cdh所需要的库
+create database hive DEFAULT CHARSET utf8 COLLATE utf8_general_ci;
+Query OK, 1 row affected (0.00 sec)
+create database amon DEFAULT CHARSET utf8 COLLATE utf8_general_ci;
+Query OK, 1 row affected (0.00 sec)
+create database hue DEFAULT CHARSET utf8 COLLATE utf8_general_ci;
+Query OK, 1 row affected (0.00 sec)
+ create database monitor DEFAULT CHARSET utf8 COLLATE utf8_general_ci;
+Query OK, 1 row affected (0.00 sec)
+create database oozie DEFAULT CHARSET utf8 COLLATE utf8_general_ci;
+Query OK, 1 row affected (0.00 sec)
+
+7.第三方依赖包安装（所有节点都安装）
+yum install chkconfig python bind-utils psmisc libxslt zlib sqlite fuse fuse-libs redhat-lsb cyrus-sasl-plain cyrus-sasl-gssapi
+注意这个地方依赖包不安装完下面启动集群的时候会死活启动不了的，这是血的教训啊！
+
+在hadoop1上准备mysql的jar包
+[root@hadoop1]# mkdir -p /usr/share/java
+修改jar包的名字，并拷贝到/usr/share/java/目录
+[root@hadoop1]# cp mysql-connector-java-5.1.40-bin.jar /usr/share/java/mysql-connector-java.jar
+
+
+所有节点添加cloudera-scml用户
+useradd --system --home=/opt/cloudera-manager/cm-5.8.3/run/cloudera-scm-server/ --no-create-home --shell=/bin/false --comment "Cloudera SCM User" cloudera-scm
+
+8.安装Cloudera-Manager
+解压cm包到指定目录，所有服务器都要做
+[root@hadoop1 ~]#mkdir /opt/cloudera-manager
+[root@hadoop1 ~]# tar -axvf cloudera-manager-centos7-cm5.8.3_x86_64.tar.gz -C /opt/cloudera-manager
+
+创建cloudera-scm用户（所有节点）
+[root@hadoop1 ~]#  useradd -r -d /opt/cloudera-manager/cm-5.8.3/run/cloudera-scm-server -M -c "Cloudera SCM User" cloudera-scm
+
+在hadoop2和hadoop3配置agent
+vim /opt/cloudera-manager/cm-5.8.3/etc/cloudera-scm-agent/config.ini
+将server_host改为CMS所在的主机名即hadoop1
+
+主节点中创建parcel-repo仓库
+[root@hadoop1 ~]# chown cloudera-scm:cloudera-scm /opt/cloudera/parcel-repo
+[root@hadoop1 ~]# mv CDH-5.8.3-1.cdh5.8.3.p0.2-el7.parcel.sha1  CDH-5.8.3-1.cdh5.8.3.p0.2-el7.parcel.sha
+[root@hadoop1 ~]# cp CDH-5.8.3-1.cdh5.8.3.p0.2-el7.parcel CDH-5.8.3-1.cdh5.8.3.p0.2-el7.parcel.sha manifest.json /opt/cloudera/parcel-repo
+解释：Clouder-Manager将CDHs从主节点的/opt/cloudera/parcel-repo目录中抽取出来，分发解压激活到各个节点的/opt/cloudera/parcels目录中
+
+初始脚本配置数据库scm_prepare_database.sh(在主节点上)
+[root@hadoop1 ~]# /opt/cloudera-manager/cm-5.8.3/share/cmf/schema/scm_prepare_database.sh  mysql -h hadoop1 -P 3306 -uroot -pwww.123 --scm-host master scm scm scm
+JAVA_HOME=/usr/java/jdk1.8.0_45
+Verifying that we can write to /opt/cloudera-manager/cm-5.8.3/etc/cloudera-scm-server
+Creating SCM configuration file in /opt/cloudera-manager/cm-5.8.3/etc/cloudera-scm-server
+Executing:  /usr/java/jdk1.8.0_45/bin/java -cp /usr/share/java/mysql-connector-java.jar:/usr/share/java/oracle-connector-java.jar:/opt/cloudera-manager/cm-5.8.3/share/cmf/schema/../lib/* com.cloudera.enterprise.dbutil.DbCommandExecutor /opt/cloudera-manager/cm-5.8.3/etc/cloudera-scm-server/db.properties com.cloudera.cmf.db.
+[                          main] DbCommandExecutor              INFO  Successfully connected to database.
+All done, your SCM database is configured correctly!
+
+说明：这个脚本就是用来创建和配置CMS需要的数据库的脚本。各参数是指：
+mysql：数据库用的是mysql，如果安装过程中用的oracle，那么该参数就应该改为oracle。
+-hhadoop1：数据库建立在hadoop1主机上面。也就是主节点上面。
+-uroot：root身份运行mysql。-123456：mysql的root密码是***。
+--scm-host hadoop1：CMS的主机，一般是和mysql安装的主机是在同一个主机上。
+最后三个参数是：数据库名，数据库用户名，数据库密码。
+
+10.在各个节点启动agent服务
+/opt/cloudera-manager/cm-5.8.3/etc/init.d/cloudera-scm-agent start
+
+在master启动server服务
+
+/opt/cloudera-manager/cm-5.8.3/etc/init.d/cloudera-scm-server start
+
+浏览器访问
+http://192.168.50.123:7180/cmf/login  用户名admin 密码admin
+
+问题1：
+service cloudera-scm-server status
+cloudera-scm-server dead but pid file exists
+解决
+[root@master cm-5.8.3]# rm /root/hadoop/cm-5.8.3/run/cloudera-scm-server.pid 
+[root@master hadoop]# ./cm-5.8.3/etc/init.d/cloudera-scm-server restart
+cloudera-scm-server is already stopped
+Starting cloudera-scm-server:                              [  OK  ]
+
+问题2：
+2016-12-08 03:40:57,479 ERROR WebServerImpl:com.cloudera.server.web.cmf.search.components.SearchRepositoryManager: The server storage directory [/var/lib/cloudera-scm-server] doesn't exist.
+2016-12-08 03:40:57,479 ERROR WebServerImpl:com.cloudera.server.web.cmf.search.components.SearchRepositoryManager: No read permission to the server storage directory [/var/lib/cloudera-scm-server]
+2016-12-08 03:40:57,479 ERROR WebServerImpl:com.cloudera.server.web.cmf.search.components.SearchRepositoryManager: No write permission to the server storage directory [/var/lib/cloudera-scm-server]
+解决：
+创建目录并加上权限以后成功
+mkdir /var/lib/cloudera-scm-server
+chown -R cloudera-scm.cloudera-scm /var/lib/cloudera-scm-server
+
+问题3：在CDH检查主机哪里会有两个警告
+解决：
+echo never > /sys/kernel/mm/transparent_hugepage/defrag
+echo 10 > /proc/sys/vm/swappiness
+
+
+参考网址：
+http://blog.csdn.net/shawnhu007/article/details/52579204
+http://www.cnblogs.com/itboys/p/5955545.html
