@@ -117,10 +117,6 @@ yum install chkconfig python bind-utils psmisc libxslt zlib sqlite fuse fuse-lib
 修改jar包的名字，并拷贝到/usr/share/java/目录
 [root@hadoop1]# cp mysql-connector-java-5.1.40-bin.jar /usr/share/java/mysql-connector-java.jar
 
-
-所有节点添加cloudera-scml用户
-useradd --system --home=/opt/cloudera-manager/cm-5.8.3/run/cloudera-scm-server/ --no-create-home --shell=/bin/false --comment "Cloudera SCM User" cloudera-scm
-
 8.安装Cloudera-Manager
 解压cm包到指定目录，所有服务器都要做
 [root@hadoop1 ~]#mkdir /opt/cloudera-manager
