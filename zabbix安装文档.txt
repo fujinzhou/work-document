@@ -57,6 +57,8 @@ tar zxvf zabbix-3.0.3.tar.gz
 cd zabbix-3.0.3
 ./configure --prefix=/usr/local/zabbix --sysconfdir=/etc/zabbix/ --enable-server --enable-agent --with-net-snmp --with-libcurl --with-mysql --with-libxml2
 make && make install
+ln -s /usr/local/data/zabbix/bin/zabbix_get  /usr/sbin/
+ln -s /usr/local/data/zabbix/sbin/zabbix_* /usr/sbin/
 
 (6)导入zabbix库
 cd  /root/zabbix-3.0.3/database/mysql

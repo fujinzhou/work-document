@@ -13,10 +13,11 @@ http://archive.cloudera.com/cdh5/parcels/5.8.3/CDH-5.8.3-1.cdh5.8.3.p0.2-el7.par
 http://archive.cloudera.com/cdh5/parcels/5.8.3/manifest.json
 
 集群规划
+服务器的内存最好大于等于2G ，要不然真的会很卡！！！
 IP地址 	主机名	说明
-192.168.160.130	hadoop1	主节点master,datanode
-192.168.160.131	hadoop2	datanode
-192.168.160.132	hadoop3 datanode
+192.168.50.123	hadoop1	主节点master,datanode
+192.168.50.124	hadoop2	datanode
+192.168.50.125	hadoop3 datanode
 
 开始安装前配置
 1.安装jdk（每个机器都要装）
