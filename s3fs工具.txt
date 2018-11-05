@@ -1,0 +1,73 @@
+安装s3fs遇到的坑
+
+1.安装依赖包
+yum install automake  gcc-c++ git libcurl-devel libxml2-devel make openssl-devel
+
+2.安装fuse
+卸载老的fuse
+# rpm -qa|grep fuse
+
+安装新的
+fuse已更名为libfuse
+项目地址：https://github.com/libfuse/libfuse
+# cd /data/software/
+# wget https://github.com/libfuse/libfuse/releases/download/fuse_2_9_4/fuse-2.8.4.tar.gz
+# tar -zxvf fuse-2.8.4.tar.gz
+# cd fuse-2.8.4
+# ./configure
+# make
+# make install
+# export PKG_CONFIG_PATH=/usr/lib64/pkgconfig/:/usr/local/lib/pkgconfig
+# modprobe fuse
+# echo "/usr/local/lib" >> /etc/ld.so.conf
+# ldconfig
+# pkg-config --modversion fuse   
+2.8.4   //看到版本表示安装成功
+
+注意：不同的系统，pkgconfig的路径也不同，这里要注意下
+
+/usr/share/pkgconfig
+/usr/lib64/pkgconfig
+/usr/local/lib/pkgconfig
+
+
+3.安装s3fs
+github下载并编译安装
+# cd /data/software/
+# git clone https://github.com/s3fs-fuse/s3fs-fuse.git
+# cd s3fs-fuse
+# ./configure
+# ./autogen.sh
+# make
+# make install
+
+
+4）创建全局IAM用户访问密钥文件
+将用户的id和key保存到文件中
+# vim /etc/passwd-s3fs
+内容为AWS秘钥，请注意保管
+秘钥的储存方式为 AWSACCESSKEYID:AWSSECRETACCESSKEY
+# chmod 640 /etc/passwd-s3fs
+
+    
+挂载：
+
+s3fs internet-588ku /mnt/ -o passwd_file=/etc/passwd-s3fs -o url=https://s3-ap-northeast-1.amazonaws.com -o endpoint=ap-northeast-1
+
+mnt  是挂载目录，url：从存储桶中选择一个文件来查看属性就知道了。endpoint（ec2主机的区域）
+
+    
+查看是否挂载成功：
+[root@pngtree_web backup_588ku]# df -h
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/xvda1      5.8G  2.9G  2.7G  52% /
+tmpfs           1.9G     0  1.9G   0% /dev/shm
+/dev/xvdf1       30G  6.1G   22G  22% /usr/local/data
+/dev/xvdg       493G  115G  353G  25% /usr/local/backup_588ku
+s3fs            256T     0  256T   0% /mnt
+
+    
+已成功挂载到/mnt目录。
+
+
+

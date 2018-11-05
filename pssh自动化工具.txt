@@ -1,0 +1,63 @@
+并行ssh运维工具pssh
+pssh：是用python编写的一个可以并发在多台服务器上面批量执行命令的工具，支持文件并行复制，远程并行执行命令，杀掉进程等。
+1.配置密钥认证
+ssh-keygen -t rsa
+[root@localhost ~]# ssh-copy-id -i .ssh/id_rsa.pub root@192.168.32.202
+测试ssh密钥认证
+[root@localhost ~]# ssh 192.168.32.202 date
+Enter passphrase for key '/root/.ssh/id_rsa': 
+2015年 01月 24日 星期六 23:43:12 EST
+2.安装
+ tar zxvf pssh-2.3.1.tar.gz 
+ cd pssh-2.3.1
+ python setup.py install
+ 3.五个主程序
+ pssh：在远程主机上并行运行命令
+ pscp：把文件并行复制到远程多台主机上，类似于scp命令
+ prsync：使用rsync协议将文件从本地主机同步到远程多台主机
+ pnuke：在远程多台主机上并行killall某个进程
+ pslurp：将文件从远程多台主机复制到本地主机
+ 4.pssh命令的常用参数及含义
+ -h：后面跟一个远程主机列表文件。文件内容格式为【user@】host【：port】
+ -H：后面跟一个远程主机名或者ip地址
+ -l:指定远程主机上的用户名
+ -p：指定pssh最大并行线程数
+ -t：设置命令执行的超时时间
+ -A：提示输入密码
+ -x：用于传递ssh命令的一些参数，每个参数用引号括起来，不同参数之间用逗号隔开
+ -P：在远程主机执行命令时，输出执行结果
+ 5.应用实例：
+ 查看主机名
+ vim hosts
+ 192.168.32.202
+[root@localhost ~]# pssh -P -h hosts hostname
+192.168.32.202: slave-drbd
+[1] 17:46:14 [SUCCESS] 192.168.32.202
+查看时间
+[root@localhost ~]# pssh -P -H 192.168.32.202 date  
+192.168.32.202: 2015年 01月 25日 星期日 01:24:32 EST
+[1] 17:53:38 [SUCCESS] 192.168.32.202
+通过设置StrictHostKeyChecking=no可以 让远程主机自动接收本地的hostkey不用每次输入yes
+[root@localhost ~]# pssh -i -O "StrictHostKeyChecking=no" -h /root/hosts "hostname"  
+[1] 17:57:06 [SUCCESS] 192.168.32.202
+slave-drbd
+将本地的hosts文件复制到远程主机
+[root@localhost ~]# pscp -h hosts /etc/hosts /tmp/
+[1] 18:00:17 [SUCCESS] 192.168.32.202
+[root@slave-drbd ~]# cd /tmp/
+[root@slave-drbd tmp]# ll
+total 4
+-rw-r--r-- 1 root root 159 Jan 25 01:31 hosts
+将远程的sshd_config复制到本地并改名为ssh
+[root@localhost ~]# pslurp -h hosts -L /tmp/ /etc/ssh/sshd_config ssh 
+[1] 18:05:02 [SUCCESS] 192.168.32.202
+[root@localhost 192.168.32.202]# ls -l
+总用量 4
+-rw------- 1 root root 3879 1月  12 18:05 ssh
+[root@localhost 192.168.32.202]# pwd
+/tmp/192.168.32.202
+通过rsync将本地文件或目录同步到远程多个主机上
+[root@localhost ~]# prsync -h hosts -l root -a -r /etc/httpd/ /tmp/httpd
+[1] 18:08:07 [SUCCESS] 192.168.32.202
+杀掉远程主机的某个进程
+pnuke -h hosts httpd

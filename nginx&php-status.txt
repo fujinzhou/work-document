@@ -1,0 +1,17 @@
+server {
+        listen  80;
+        server_name     web2.com;
+        location /NginxStatus {
+                stub_status on;
+                access_log logs/nginxstatus.log;
+                allow 127.0.0.1;
+                deny all;
+        }
+        location /PhpStatus {
+                fastcgi_pass 127.0.0.1:9000;
+                include fastcgi_params;
+                fastcgi_param SCRIPT_FILENAME $fastcgi_script_name;
+                allow 127.0.0.1;
+                deny all;
+        }
+}

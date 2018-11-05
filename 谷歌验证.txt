@@ -1,0 +1,87 @@
+server 端 配置文件
+Port 3208
+Protocol 2
+ListenAddress 0.0.0.0
+SyslogFacility AUTHPRIV
+RSAAuthentication yes
+PubkeyAuthentication yes
+PermitRootLogin no
+PermitEmptyPasswords no
+PasswordAuthentication yes
+ChallengeResponseAuthentication no
+GSSAPIAuthentication no
+#是否在用户退出登录后自动销毁用户凭证缓存
+GSSAPICleanupCredentials yes
+UsePAM yes
+AcceptEnv LANG LC_CTYPE LC_NUMERIC LC_TIME LC_COLLATE LC_MONETARY LC_MESSAGES
+AcceptEnv LC_PAPER LC_NAME LC_ADDRESS LC_TELEPHONE LC_MEASUREMENT
+AcceptEnv LC_IDENTIFICATION LC_ALL
+X11Forwarding no
+UseDNS no
+ClientAliveInterval 60
+Subsystem       sftp    /usr/libexec/openssh/sftp-server
+client端配置文件
+Port 3208
+Protocol 2
+ListenAddress ip
+SyslogFacility AUTHPRIV
+PermitRootLogin no
+PermitEmptyPasswords no
+PasswordAuthentication yes
+ChallengeResponseAuthentication no
+GSSAPIAuthentication no
+GSSAPICleanupCredentials yes
+UsePAM yes
+AcceptEnv LANG LC_CTYPE LC_NUMERIC LC_TIME LC_COLLATE LC_MONETARY LC_MESSAGES
+AcceptEnv LC_PAPER LC_NAME LC_ADDRESS LC_TELEPHONE LC_MEASUREMENT
+AcceptEnv LC_IDENTIFICATION LC_ALL
+X11Forwarding no
+UseDNS no
+ClientAliveInterval 60
+Subsystem       sftp    /usr/libexec/openssh/sftp-server
+
+1.生成公钥与私钥
+ ssh-keygen -t rsa
+Generating public/private rsa key pair.
+Enter file in which to save the key (/home/client/.ssh/id_rsa): #此处直接按回车即可
+Created directory '/home/client/.ssh'.
+Enter passphrase (empty for no passphrase): #此处直接按回车即可
+Enter same passphrase again: #此处直接按回车即可
+Your identification has been saved in /home/client/.ssh/id_rsa.
+Your public key has been saved in /home/client/.ssh/id_rsa.pub.
+
+2. 将公钥文件追加到server端用户目录的./ssh/authorized_keys中 ，.ssh目录权限必须是0700
+cat id_rsa.pub >> authorized_keys
+chmod 600 authorized_keys
+
+
+3.server 端 和client 端 无密码登录
+scp ./id_rsa.pub sweet@192.168.1.101:/home/sweet/.ssh/authorized_keys
+#注意一下目标机的authorized_keys的权限是-rw-r--r--，如果不是需要执行chmod 644 authorized_keys修改文件的权限
+
+谷歌验证器
+安装GOOGLE-AUTHENTICATOR验证器
+1.安装epel源
+rpm -ivh http://dl.fedoraproject.org/pub/epel/6/x86_64/epel-release-6-8.noarch.rpm
+2.安装git级二维码工具
+yum install -y git qrencode
+3.安装开发包工具
+yum groupinstall -y "Development Tools" pam-devel
+4.安装google-authenticator
+git clone https://github.com/google/google-authenticator.git
+cd google-authenticator/libpam/
+sh bootstrap.sh
+./configure && make && make install
+cp -v /usr/local/lib/security/pam_google_authenticator.so /lib64/security/
+5.生成基于计数的认证token（可以忽略时间错误）
+google-authenticator（n,y,y,y）
+6.更改ssh级pam设置
+## 修改PAM
+vi /etc/pam.d/sshd
+auth required pam_google_authenticator.so
+## 修改SSH配置
+ChallengeResponseAuthentication yes
+UsePAM yes
+service sshd restart
+修改ssh的鉴权方式，改为键盘交互。
+注意： 这里要把应急验证码记录下，防止验证坏掉以后无法登陆，也可以把ssh的公钥下载下来做备用登陆方式

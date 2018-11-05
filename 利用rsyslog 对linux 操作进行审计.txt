@@ -1,0 +1,21 @@
+环境：客户端和服务端都需要安装rsyslog服务
+跳板机rsyslogserver端
+cd /etc/rsyslog.d/
+cat server.conf
+$ModLoad imtcp
+$InputTCPServerRun 514
+vim    /etc/rsyslog.conf
+local4.*                                                /var/log/history.log
+rsyslogclient端
+cat /etc/rsyslog.d/client.conf
+local4.*                                                @@你的运维机:514
+eth0网卡根据情况修改
+cat /etc/profile.d/client.sh
+export PROMPT_COMMAND='{ msg=$(history 1 | { read x y; echo $y; });logger -p local4.info ["LOCAL|`grep IPADDR /etc/sysconfig/network-scripts/ifcfg-eth0|sed 's/IPADDR=//g'`" -- "SSH|$SSH_CONNECTION $SSH_TTY" -- "USER|$USER" -- "PWD|$PWD"]: "$msg"; }'
+重启服务
+service rsyslog restart
+
+记录 时间，用户，地址，历史命令
+vim /etc/profile
+USER_IP=`who -u am i 2> /dev/null | awk '{print $NF}' | sed -e 's/[()]//g'`
+PROMPT_COMMAND='date "+[ %Y%m%d-%H:%M:%S $LOGNAME from $USER_IP ]: `history 1 |cut -c 8-`" >> /var/log/command.log'

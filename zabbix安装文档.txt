@@ -51,7 +51,7 @@ yum install httpd libxml2-devel net-snmp-devel libcurl-devel
 
 (5)安装zabbix
 groupadd zabbix
-useradd -g zabbix -m -s /sbin/nologin
+useradd -g zabbix -m -s /sbin/nologin zabbix
 wget http://sourceforge.net/projects/zabbix/files/ZABBIX%20Latest%20Stable/3.0.3/zabbix-3.0.3.tar.gz
 tar zxvf zabbix-3.0.3.tar.gz
 cd zabbix-3.0.3
@@ -118,3 +118,12 @@ service httpd restart
 注意：为了确保安全，在安装成功后要将setup.php重命名
 cd /var/www/html/zabbix
 cp setup.php setup.phpbak
+
+
+
+proxy端mysql 授权
+GRANT ALL PRIVILEGES ON zabbix_proxy_qd.* TO 'zabbix'@'%';
+ CREATE DATABASE zabbix_proxy_qd CHARACTER SET utf8 COLLATE utf8_bin;
+ 
+fpm打包
+fpm -s dir -t rpm -n  zabbix -v 3.0.5 --post-install /root/zabbix_agent.sh  -f /usr/local/data/zabbix/
